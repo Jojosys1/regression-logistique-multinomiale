@@ -1,0 +1,490 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{caption}
+
+\geometry{margin=2.5cm}
+\setstretch{1.2}
+
+\title{\textbf{Régression Logistique Multinomiale :}\\
+Fondements théoriques, mesures d'interprétation et application à des données cliniques}
+\author{DOSSOU YOVO Thérèse \and GLODJO Jolémon\\
+École Nationale Supérieure de Génie Mathématique et Modélisation (ENSGMM), Cotonou, Bénin}
+\date{\today}
+
+\newtheorem{definition}{Définition}[section]
+\newtheorem{propriete}{Propriété}[section]
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Cet article présente une synthèse structurée de la régression logistique multinomiale (RLM), en s'appuyant sur le cadre théorique détaillé dans \textit{TP.pdf} et sur une application à la base \textit{10.21037atm-2020-57-1 (1vr).xlsx}. La variable réponse étudiée est la classification de la cause spécifique de décès (trois modalités), expliquée par des covariables cliniques et sociodémographiques (âge, sexe, race, site primaire, grade tumoral, stade, chimiothérapie et statut vital). L'objectif est double : clarifier les concepts et les mesures d'interprétation de la RLM, puis montrer leur utilité dans un contexte de données biomédicales réelles. L'article détaille la formulation du modèle, l'estimation par maximum de vraisemblance, les tests d'inférence (Wald, rapport de vraisemblance), les mesures de qualité d'ajustement (pseudo-$R^2$, AIC, BIC) et l'évaluation prédictive (matrice de confusion et métriques multi-classes).
+\end{abstract}
+
+\section{Introduction}
+La régression logistique multinomiale est l'extension naturelle de la régression logistique binaire lorsque la variable réponse comporte plus de deux catégories nominales. Elle est particulièrement adaptée aux études où l'issue observée correspond à des états mutuellement exclusifs, sans ordre naturel entre les modalités.
+
+Dans la littérature appliquée, cette approche est utile en épidémiologie, en santé publique, en marketing et en sciences sociales. Dans notre cadre, elle permet de modéliser la probabilité d'appartenir à l'une des classes de cause spécifique de décès, en fonction de caractéristiques cliniques et démographiques observées chez les patients.
+
+\subsection{Objectif principal (formulation explicite)}
+\textbf{Objectif principal reformulé :}
+\begin{quote}
+Présenter, de manière pédagogique et rigoureuse, les concepts de la régression logistique multinomiale, expliciter les principales mesures statistiques qui permettent son interprétation et son évaluation, puis démontrer son intérêt pratique sur une base de données réelles afin d'identifier les facteurs associés aux différentes issues cliniques.
+\end{quote}
+
+\textbf{Déclinaison opérationnelle de cet objectif :}
+\begin{enumerate}[label=\arabic*.]
+    \item Exposer le cadre théorique de la RLM (formulation, contraintes d'identifiabilité, hypothèses).
+    \item Détailler les méthodes d'estimation des paramètres et les procédures d'inférence.
+    \item Interpréter les coefficients via les log-odds, odds-ratios et probabilités prédites.
+    \item Évaluer la qualité du modèle avec des critères d'ajustement et de performance prédictive.
+    \item Illustrer l'ensemble du processus sur la base \textit{10.21037atm-2020-57-1 (1vr).xlsx}.
+\end{enumerate}
+
+\section{Cadre théorique de la régression logistique multinomiale}
+
+\subsection{Définition et contexte du modèle}
+
+La régression logistique multinomiale (RLM) est une extension de la régression logistique binaire au cas où la variable réponse prend $J\geq 3$ catégories mutuellement exclusives et exhaustives. Contrairement aux modèles de régression linéaire ou logistique binaire qui supposent une variable réponse continue ou binaire, la RLM traite explicitement de réponses catégorielles polytomous.
+
+Dans ce cadre, aucun ordre naturel n'existe entre les catégories, ce qui distingue la RLM des modèles de régression ordinale ou proportionnels. Cette approche est fondamentale en épidémiologie, lorsque l'on étudie concurrence entre des événements cliniques incompatibles (par exemple, différentes causes de décès).
+
+\subsection{Notations et formulation du modèle}
+
+Soient :
+\begin{itemize}
+    \item $Y_i \in \{1,2,\dots,J\}$ la variable réponse multinomiale pour l'observation $i$,
+    \item $n$ le nombre total d'observations,
+    \item $\mathbf{x}_i=(x_{i0}, x_{i1},\dots,x_{ip})^\top$ le vecteur des covariables (avec $x_{i0}=1$ pour l'intercept),
+    \item $\mathbf{X}$ la matrice $n \times (p+1)$ des covariables,
+    \item $y_{ij}=\mathbb{1}(Y_i=j)$ l'indicatrice de l'observation $i$ appartenant à la catégorie $j$.
+\end{itemize}
+
+Pour chaque observation et chaque catégorie $j \in \{1,\dots,J\}$, la probabilité conditionnelle est modélisée par le modèle multinomial logit :
+\begin{equation}\label{eq:multinomial-logit}
+\pi_{ij}=\mathbb{P}(Y_i=j\mid \mathbf{x}_i)=\frac{\exp(\boldsymbol{\beta}_j^\top\mathbf{x}_i)}{\sum_{k=1}^{J}\exp(\boldsymbol{\beta}_k^\top\mathbf{x}_i)}.
+\end{equation}
+
+Les probabilités satisfont naturellement les contraintes $\pi_{ij} \in (0,1)$ et $\sum_{j=1}^J \pi_{ij}=1$ pour toute observation $i$.
+
+\subsection{Contrainte d'identifiabilité et paramètres structurels}
+
+Sans contrainte supplémentaire, le modèle (\ref{eq:multinomial-logit}) possède $J(p+1)$ paramètres mais seulement $J-1$ dimensions de variation indépendante, due à la contrainte de somme des probabilités. En effet, si on remplace tous les $\boldsymbol{\beta}_j$ par $\boldsymbol{\beta}_j^* = \boldsymbol{\beta}_j + \mathbf{c}$ (où $\mathbf{c}$ est un vecteur constant quelconque), on obtient :
+\begin{align}
+\pi_{ij}^* &= \frac{\exp((\boldsymbol{\beta}_j + \mathbf{c})^\top \mathbf{x}_i)}{\sum_{k=1}^J \exp((\boldsymbol{\beta}_k + \mathbf{c})^\top \mathbf{x}_i)} \\
+&= \frac{\exp(\boldsymbol{\beta}_j^\top \mathbf{x}_i) \cdot \exp(\mathbf{c}^\top \mathbf{x}_i)}{\exp(\mathbf{c}^\top \mathbf{x}_i) \sum_{k=1}^J \exp(\boldsymbol{\beta}_k^\top \mathbf{x}_i)} = \pi_{ij}.
+\end{align}
+
+Le modèle n'est donc pas identifiable sans contrainte. Pour résoudre ce problème, on impose une **régularisation par catégorie de référence**. Spécifiquement, on fixe :
+\begin{equation}\label{eq:constraint}
+\boldsymbol{\beta}_J=\mathbf{0}_{(p+1) \times 1}.
+\end{equation}
+
+Cette contrainte ramène le nombre de paramètres à $(J-1)(p+1)$, qui correspond exactement aux degrés de liberté du modèle. Le choix de la catégorie $J$ est arbitraire mais doit être fixé à priori.
+
+Sous cette contrainte, le modèle devient :
+\begin{equation}\label{eq:reference-coded}
+\pi_{ij} = \begin{cases}
+\dfrac{\exp(\boldsymbol{\beta}_j^\top \mathbf{x}_i)}{1 + \sum_{k=1}^{J-1}\exp(\boldsymbol{\beta}_k^\top \mathbf{x}_i)} & \text{pour } j=1,\dots,J-1 \\
+\dfrac{1}{1 + \sum_{k=1}^{J-1}\exp(\boldsymbol{\beta}_k^\top \mathbf{x}_i)} & \text{pour } j=J
+\end{cases}
+\end{equation}
+
+Le **log-odds** de la catégorie $j$ par rapport à la catégorie de référence $J$ s'écrit alors :
+\begin{equation}\label{eq:logodds}
+\log\left(\frac{\pi_{ij}}{\pi_{iJ}}\right) = \boldsymbol{\beta}_j^\top \mathbf{x}_i \quad \text{pour } j=1,\dots,J-1.
+\end{equation}
+
+Cette formulation a l'avantage pédagogique que les paramètres $\boldsymbol{\beta}_j$ s'interprètent directement comme des effets logarithmiques sur les probabilités relatives à la référence.
+
+\subsection{Interprétation des paramètres et effets marginaux}
+
+\subsubsection{Log-odds et odds-ratio}
+
+D'après l'équation (\ref{eq:logodds}), le coefficient $\beta_{jh}$ correspond au coefficient de la covariable $x_h$ dans le log-odds entre la catégorie $j$ et la catégorie de référence $J$.
+
+Précisément, pour une augmentation d'une unité de la covariable $x_h$ (notation : $x_h \to x_h + 1$), le log-odds devient :
+\begin{equation}
+\log\left(\frac{\pi_{ij}(x_h+1)}{\pi_{iJ}(x_h+1)}\right) = \boldsymbol{\beta}_j^\top \mathbf{x}_i + \beta_{jh} = \log\left(\frac{\pi_{ij}(x_h)}{\pi_{iJ}(x_h)}\right) + \beta_{jh}.
+\end{equation}
+
+En exponentiant cette relation, on obtient l'**odds-ratio** :
+\begin{equation}\label{eq:oddsratio}
+\text{OR}_{jh} = \frac{\mathbb{P}(Y=j | x_h+1) / \mathbb{P}(Y=J | x_h+1)}{\mathbb{P}(Y=j | x_h) / \mathbb{P}(Y=J | x_h)} = \exp(\beta_{jh}).
+\end{equation}
+
+\textbf{Interprétation :}
+\begin{itemize}
+    \item Si $\text{OR}_{jh} > 1$ (i.e., $\beta_{jh} > 0$), une augmentation d'une unité de $x_h$ multiplie par $\text{OR}_{jh}$ les chances d'être dans la catégorie $j$ plutôt que dans la catégorie de référence, toutes autres covariables constantes.
+    \item Si $\text{OR}_{jh} < 1$ (i.e., $\beta_{jh} < 0$), une augmentation d'une unité de $x_h$ divise par $1/\text{OR}_{jh}$ ces chances relatives.
+    \item Si $\text{OR}_{jh} = 1$ (i.e., $\beta_{jh} = 0$), la covariable $x_h$ n'a pas d'effet sur les probabilités relatives de $j$ contre $J$.
+\end{itemize}
+
+Pour des variables binaires (indicatrices), $x_h \in \{0, 1\}$, l'odds-ratio est alors le rapport des chances de catégorie $j$ entre les deux valeurs de $x_h$.
+
+\subsubsection{Probabilités prédites et effets marginaux moyens}
+
+Bien que les coefficients $\beta_{jh}$ s'interprètent directement comme des log-odds, on souhaite souvent exprimer l'effet en termes de **probabilités prédites**.
+
+La probabilité prédite de la catégorie $j$ pour un profil de covariables $\mathbf{x}_i$ est donnée par l'équation (\ref{eq:reference-coded}). L'effet marginal (ou "marginal effect") de la covariable $x_h$ sur cette probabilité est :
+\begin{equation}
+\frac{\partial \pi_{ij}}{\partial x_h} = \beta_{jh} \left( \pi_{ij} - \pi_{ij}^2 \sum_{k=1}^{J-1} \pi_{ik} \beta_{kh} \right).
+\end{equation}
+
+Cet effet marginal dépend du profil $\mathbf{x}_i$ (il n'est pas constant), contrairement au coefficient $\beta_{jh}$ qui est identique pour toutes les observations. On définit généralement l'**effet marginal moyen** en évaluant cette dérivée au point moyen des covariables ou en en prenant la moyenne sur les observations de l'échantillon.
+
+\subsubsection{Probabilités marginales entre paires de catégories}
+
+De plus, il peut être intéressant de comparer deux catégories autres que $J$. Le log-odds entre les catégories $j$ et $j'$ (où $j, j' \neq J$) est :
+\begin{equation}
+\log\left(\frac{\pi_{ij}}{\pi_{ij'}}\right) = \log\left(\frac{\pi_{ij}}{\pi_{iJ}}\right) - \log\left(\frac{\pi_{ij'}}{\pi_{iJ}}\right) = (\boldsymbol{\beta}_j - \boldsymbol{\beta}_{j'})^\top \mathbf{x}_i.
+\end{equation}
+
+\section{Estimation et inférence}
+
+\subsection{Vraisemblance et fonction de log-vraisemblance}
+
+Sous l'hypothèse que les observations sont indépendantes et que chaque observation $Y_i$ suit une loi multinomiale avec probabilités $\boldsymbol{\pi}_i = (\pi_{i1}, \dots, \pi_{iJ})^\top$, la vraisemblance conjointe s'écrit :
+\begin{equation}
+L(\boldsymbol{\beta}) = \prod_{i=1}^{n} \prod_{j=1}^{J} \pi_{ij}^{y_{ij}}.
+\end{equation}
+
+La **log-vraisemblance** est :
+\begin{equation}\label{eq:loglikelihood}
+\ell(\boldsymbol{\beta}) = \log L(\boldsymbol{\beta}) = \sum_{i=1}^{n}\sum_{j=1}^{J} y_{ij}\log(\pi_{ij}).
+\end{equation}
+
+Mais comme $\boldsymbol{\beta}_J = \mathbf{0}$ (contrainte), on peut écrire plus explicitement :
+\begin{equation}\label{eq:loglikelihood-constrained}
+\ell(\boldsymbol{\beta}_{1:J-1}) = \sum_{i=1}^{n} \left[ \sum_{j=1}^{J-1} y_{ij} (\boldsymbol{\beta}_j^\top \mathbf{x}_i) - \log\left(1 + \sum_{k=1}^{J-1}\exp(\boldsymbol{\beta}_k^\top \mathbf{x}_i)\right) \right].
+\end{equation}
+
+\subsubsection{Estimateur du maximum de vraisemblance}
+
+L'estimateur du maximum de vraisemblance (EMV) $\widehat{\boldsymbol{\beta}} = (\widehat{\boldsymbol{\beta}}_1, \dots, \widehat{\boldsymbol{\beta}}_{J-1})$ maximise la log-vraisemblance. Il satisfait les **équations de score** :
+\begin{equation}\label{eq:score}
+\frac{\partial \ell(\boldsymbol{\beta})}{\partial \boldsymbol{\beta}_j} = \sum_{i=1}^{n} \mathbf{x}_i (y_{ij} - \pi_{ij}) = \mathbf{0} \quad \text{pour } j=1,\dots,J-1.
+\end{equation}
+
+Cet ensemble de $(J-1)(p+1)$ équations n'a pas de solution analytique fermée en général. La solution s'obtient numériquement par des algorithmes itératifs.
+
+\subsubsection{Algorithmes de résolution}
+
+**Algorithme de Newton-Raphson :** L'itération standard s'écrit
+\begin{equation}
+\boldsymbol{\beta}^{(t+1)} = \boldsymbol{\beta}^{(t)} - \left[ \mathbf{H}(\boldsymbol{\beta}^{(t)}) \right]^{-1} \nabla \ell(\boldsymbol{\beta}^{(t)}),
+\end{equation}
+où $\mathbf{H}(\boldsymbol{\beta})$ est la matrice hessienne (ou matrice d'information observée) et $\nabla \ell$ est le vecteur gradient. La convergence est généralement rapide (convergence quadratique) pour la log-vraisemblance multinomiale qui est strictement concave.
+
+**Algorithme IRLS (Iteratively Re-weighted Least Squares) :** Cet algorithme reformule le problème d'optimisation de vraisemblance en une succession de problèmes de régression linéaire pondérée, particulièrement utile pour certaines implémentations logicielles.
+
+\subsection{Propriétés asymptotiques de l'EMV}
+
+Sous des conditions de régularité standard (notamment la compacité de l'espace des paramètres et la condition d'identification), l'estimateur $\widehat{\boldsymbol{\beta}}$ possède les propriétés asymptotiques usuelles :
+
+**Convergence :** $\widehat{\boldsymbol{\beta}} \xrightarrow{\mathbb{P}} \boldsymbol{\beta}_0$ quand $n \to \infty$ (convergence en probabilité vers la vraie valeur $\boldsymbol{\beta}_0$).
+
+**Normalité asymptotique :** 
+\begin{equation}\label{eq:asymptotic-normality}
+\sqrt{n}(\widehat{\boldsymbol{\beta}} - \boldsymbol{\beta}_0) \xrightarrow{d} \mathcal{N}\left(\mathbf{0}, \mathcal{I}(\boldsymbol{\beta}_0)^{-1}\right),
+\end{equation}
+où $\mathcal{I}(\boldsymbol{\beta}_0)$ est la **matrice d'information de Fisher** :
+\begin{equation}
+\mathcal{I}_{jh,j'h'}(\boldsymbol{\beta}) = \mathbb{E}\left[-\frac{\partial^2 \ell}{\partial \beta_{jh} \partial \beta_{j'h'}}\right] = -\mathbb{E}\left[\frac{\partial^2 \ell}{\partial \beta_{jh} \partial \beta_{j'h'}}\right].
+\end{equation}
+
+Cette propriété permet de construire des intervalles de confiance et des tests d'hypothèse.
+
+\subsubsection{Matrice de variance-covariance asymptotique}
+
+La variance-covariance asymptotique de $\widehat{\boldsymbol{\beta}}$ est estimée par :
+\begin{equation}\label{eq:vcov}
+\widehat{\text{Var}}(\widehat{\boldsymbol{\beta}}) = \left[ -\frac{\partial^2 \ell(\widehat{\boldsymbol{\beta}})}{\partial \boldsymbol{\beta} \partial \boldsymbol{\beta}^\top} \right]^{-1} = \left[ \mathbf{H}(\widehat{\boldsymbol{\beta}}) \right]^{-1}.
+\end{equation}
+
+L'erreur-type du coefficient $\widehat{\beta}_{jh}$ est $\text{SE}(\widehat{\beta}_{jh}) = \sqrt{\widehat{\text{Var}}(\widehat{\beta}_{jh})}$.
+
+\subsection{Tests d'hypothèses}
+
+\subsubsection{Test de Wald pour un coefficient individuel}
+
+Pour tester l'hypothèse nulle $H_0 : \beta_{jh} = 0$ (c'est-à-dire, absence d'effet de la covariable $x_h$ sur le log-odds de la catégorie $j$ vs. la référence), on utilise la **statistique de Wald** :
+\begin{equation}\label{eq:wald}
+W_{jh} = \frac{\widehat{\beta}_{jh}^2}{\widehat{\text{SE}}^2(\widehat{\beta}_{jh})} \sim \chi^2(1) \quad \text{(sous } H_0\text{)}.
+\end{equation}
+
+Une alternative équivalente est la **statistique t** (ou "z-test") :
+\begin{equation}
+z_{jh} = \frac{\widehat{\beta}_{jh}}{\widehat{\text{SE}}(\widehat{\beta}_{jh})} \sim \mathcal{N}(0,1) \quad \text{(sous } H_0\text{)}.
+\end{equation}
+
+L'intervalle de confiance à $95\%$ pour $\beta_{jh}$ est :
+\begin{equation}
+\text{IC}_{95\%}(\beta_{jh}) = \left[ \widehat{\beta}_{jh} - 1.96 \cdot \widehat{\text{SE}}(\widehat{\beta}_{jh}), \quad \widehat{\beta}_{jh} + 1.96 \cdot \widehat{\text{SE}}(\widehat{\beta}_{jh}) \right].
+\end{equation}
+
+Pour l'odds-ratio $\text{OR}_{jh}$, l'intervalle de confiance est :
+\begin{equation}
+\text{IC}_{95\%}(\text{OR}_{jh}) = \left[ \exp(\text{IC}_{95\%}(\beta_{jh})_\text{inf}), \quad \exp(\text{IC}_{95\%}(\beta_{jh})_\text{sup}) \right].
+\end{equation}
+
+\subsubsection{Test du rapport de vraisemblance (Likelihood Ratio Test)}
+
+Pour tester un ensemble de contraintes (par exemple, tester la significativité globale d'une covariable)
+
+\subsection{Mesures de qualité d'ajustement}
+
+Contrairement à la régression linéaire, le modèle multinomial n'admet pas de mesure d'ajustement aussi naturelle que le $R^2$. Plusieurs critères alternatifs ont été proposés.
+
+\subsubsection{Pseudo-$R^2$}
+
+**Pseudo-$R^2$ de McFadden :**
+\begin{equation}\label{eq:r2-mcfadden}
+R^2_\text{McFadden} = 1 - \frac{\ell_\text{full}}{\ell_\text{null}},
+\end{equation}
+où $\ell_\text{null}$ est la log-vraisemblance du modèle nul (intercepts seuls) et $\ell_\text{full}$ celle du modèle complet. Cette mesure prend valeur dans $[0,1)$ et augmente avec la qualité de l'ajustement. Typiquement, une valeur $> 0.20$ indique un bon fit.
+
+**Pseudo-$R^2$ de Cox-Snell :**
+\begin{equation}\label{eq:r2-coxsnell}
+R^2_\text{Cox-Snell} = 1 - \left( \frac{L_\text{null}}{L_\text{full}} \right)^{2/n} = 1 - \exp\left( -\frac{2}{n}[\ell_\text{full} - \ell_\text{null}] \right),
+\end{equation}
+où $L$ désigne la vraisemblance (non-logeée). Cette mesure s'approche de $1$ quand l'ajustement est excellent.
+
+**Pseudo-$R^2$ de Nagelkerke (normalisé) :**
+\begin{equation}\label{eq:r2-nagelkerke}
+R^2_\text{Nagelkerke} = \frac{R^2_\text{Cox-Snell}}{1 - \exp\left(2\ell_\text{null}/n\right)},
+\end{equation}
+qui ramène $R^2_\text{Cox-Snell}$ à l'intervalle $[0,1]$.
+
+\subsubsection{Critères informationnels}
+
+**Critère d'Information d'Akaike (AIC) :**
+\begin{equation}\label{eq:aic}
+\text{AIC} = -2\ell_\text{full} + 2k,
+\end{equation}
+où $k$ est le nombre de paramètres estimés. L'AIC pénalise la complexité du modèle. Pour comparer deux modèles, on préfère celui avec l'AIC le plus bas.
+
+**Critère d'Information Bayésien (BIC) :**
+\begin{equation}\label{eq:bic}
+\text{BIC} = -2\ell_\text{full} + k \log n,
+\end{equation}
+qui applique une pénalité plus forte (proportionnelle à $\log n$ plutôt que $2$). Le BIC est généralement utilisé quand on cherche la "vraie" structure du modèle (il est consistent en sélection de modèle asymptotiquement).
+
+\subsubsection{Déviance et résidus}
+
+La **déviance** est une généralisation de la somme des carrés des résidus :
+\begin{equation}\label{eq:deviance}
+D = -2\ell_\text{full} = -2 \sum_{i=1}^{n}\sum_{j=1}^{J} y_{ij}\log(\widehat{\pi}_{ij}).
+\end{equation}
+
+La **déviance nulle** $D_\text{null} = -2\ell_\text{null}$ correspond au modèle d'intercept seul.
+
+Les **résidus** associés à chaque observation peuvent être calculés de plusieurs façons :
+\begin{itemize}
+    \item Résidus de déviance : $r_i = \text{sign}(y_{ij} - \widehat{\pi}_{ij}) \sqrt{d_i}$ où $d_i$ est la contribution à la déviance,
+    \item Résidus de Pearson : $r_i = \frac{y_{ij} - \widehat{\pi}_{ij}}{\sqrt{\widehat{\pi}_{ij}(1-\widehat{\pi}_{ij})}}$.
+\end{itemize}
+
+Un diagnostic de goodnessof-fit peut se faire en examinant la distribution de ces résidus et en détectant les outliers.
+
+\section{Évaluation prédictive et mesures de performance classification}
+
+\subsection{Matrice de confusion et métriques associées}
+
+Une fois le modèle estimé, on peut générer des prédictions sur un ensemble de test (ou par validation croisée). Pour chaque observation $i$, on obtient les probabilités prédites $\widehat{\pi}_{ij}$ pour chaque catégorie $j \in \{1, \dots, J\}$. La prédiction "hard" est :
+\begin{equation}\label{eq:prediction-hard}
+\widehat{Y}_i = \arg\max_{j \in \{1,\dots,J\}} \widehat{\pi}_{ij},
+\end{equation}
+c'est-à-dire la catégorie avec la probabilité prédite la plus élevée.
+
+La **matrice de confusion** $\mathbf{C}$ est une matrice $J \times J$ où l'entrée $(j, j')$ compte le nombre d'observations ayant vraie classe $j$ et classe prédite $j'$. Plus formellement,
+\begin{equation}
+C_{jj'} = \#\{ i : Y_i = j, \widehat{Y}_i = j' \}.
+\end{equation}
+
+En entrée, on a :
+\begin{itemize}
+    \item **Vrais positifs (VP)** pour la catégorie $j$ : $C_{jj}$ = observations correctement classifiées dans $j$,
+    \item **Faux positifs (FP)** pour la catégorie $j$ : $\sum_{j' \neq j} C_{j'j}$ = observations autres que $j$ prédites dans $j$,
+    \item **Faux négatifs (FN)** pour la catégorie $j$ : $\sum_{j' \neq j} C_{jj'}$ = observations de classe $j$ prédites ailleurs,
+    \item **Vrais négatifs (VN)** pour la catégorie $j$ : observations correctement prédites hors de $j$ (pas d'intérêt principal en multinomial).
+\end{itemize}
+
+\subsubsection{Métriques de performance par catégorie}
+
+Pour chaque catégorie $j$, on définit :
+\begin{itemize}
+    \item **Sensibilité (Rappel)** : $\text{Sen}_j = \frac{\text{VP}_j}{\text{VP}_j + \text{FN}_j} = \frac{C_{jj}}{\sum_{j'=1}^J C_{jj'}}$ (proportion d'observations de classe $j$ correctement identifiées).
+    
+    \item **Spécificité** : $\text{Spe}_j = \frac{\text{VN}_j}{\text{VN}_j + \text{FP}_j}$ (proportion d'observations hors de $j$ correctement rejetées).
+    
+    \item **Précision** : $\text{Pre}_j = \frac{\text{VP}_j}{\text{VP}_j + \text{FP}_j} = \frac{C_{jj}}{\sum_{i=1}^J C_{ij}}$ (proportion des prédictions de classe $j$ véritablement correctes).
+    
+    \item **F1-score** : $\text{F1}_j = 2 \frac{\text{Pre}_j \times \text{Sen}_j}{\text{Pre}_j + \text{Sen}_j}$ (moyenne harmonique de précision et sensibilité).
+end{itemize}
+
+\subsubsection{Métriques agrégées (multi-class)}
+
+Pour synthétiser la performance sur toutes les classes :
+\begin{itemize}
+    \item **Accuracy globale** : $\text{Acc} = \frac{1}{n} \sum_i \mathbb{1}(\widehat{Y}_i = Y_i) = \frac{\text{diagonal}(\mathbf{C})}{n}$ (proportion d'observations correctement classifiées).
+    
+    \item **Macro-moyenne** : moyenne simple des métriques par classe : $\overline{\text{Sen}} = \frac{1}{J}\sum_j \text{Sen}_j$, etc. Chaque classe y a le même poids.
+    
+    \item **Micro-moyenne** : agrégation d'abord les VP/FP/FN, puis calcul des métriques : $\text{Acc}_\text{micro} = \text{Acc}$ (identique à l'accuracy).  
+    
+    \item **Moyenne pondérée (Weighted average)** : $\frac{1}{n}\sum_j n_j \times \text{Sen}_j$ où $n_j = \sum_{j'=1}^J C_{jj'}$ (nombre d'observations vraiment de classe $j$).
+\end{itemize}
+
+\subsection{Courbes ROC généralisées (One-vs-Rest)}
+
+Pour des problèmes multinomiaux, on peut généraliser la courbe ROC (Receiver Operating Characteristic) : pour chaque classe $j$, on construit une courbe ROC "one-vs-rest" en traitant la confiance du modèle pour la classe $j$ (probabilité $\widehat{\pi}_{ij}$) comme une note de décision, et en établissant la sensibilité et 1-spécificité quand on varie le seuil de classification.
+
+L'**aire sous la courbe ROC (AUC)** fournit une synthèse : AUC = 1 correspond à une séparation parfaite, AUC = 0.5 à un classement aléatoire.
+
+\section{Description de la base de données}
+\subsection{Source et structure}
+L'application repose sur le fichier \textit{10.21037atm-2020-57-1 (1vr).xlsx}, feuille \textit{Table 1}, contenant $n=3000$ observations et 10 variables.
+
+\begin{table}[H]
+\centering
+\caption{Variables disponibles dans la base}
+\begin{tabular}{p{4.1cm}p{8.9cm}}
+\toprule
+\textbf{Variable} & \textbf{Description} \\
+\midrule
+Agegroup & Tranche d'âge (catégorielle) \\
+Sex & Sexe (Male/Female) \\
+Race & Groupe racial \\
+Primarysite & Site primaire tumoral \\
+Grade & Grade histologique \\
+Stage & Stade tumoral \\
+Chemotherapy & Traitement par chimiothérapie (Yes/No-unknown) \\
+Status & Statut vital (Alive/Dead) \\
+Csdc & Cause spécifique de décès (issue multi-classes) \\
+Survivalmonths & Durée de survie (en mois) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Variable dépendante retenue}
+Dans la logique de la RLM, la variable cible est :
+\begin{equation*}
+Y = \texttt{Csdc}
+\end{equation*}
+avec trois modalités observées dans les données :
+\begin{enumerate}[label=\arabic*.]
+    \item Alive,
+    \item Dead (attributable to this cancer dx),
+    \item Dead of other cause.
+\end{enumerate}
+
+\section{Plan d'analyse statistique}
+\subsection{Prétraitement}
+\begin{enumerate}[label=\arabic*.]
+    \item Vérification des valeurs manquantes et harmonisation des libellés.
+    \item Encodage des variables qualitatives en indicatrices (one-hot encoding).
+    \item Choix d'une catégorie de référence pour $Y$ (par exemple \textit{Alive}).
+\end{enumerate}
+
+\subsection{Spécification du modèle appliqué}
+Le modèle empirique peut s'écrire :
+\begin{align}
+\log\left(\frac{\mathbb{P}(Y=j\mid X)}{\mathbb{P}(Y=\text{Alive}\mid X)}\right)
+&= \beta_{j0} + \beta_{j1}\,\text{Agegroup} + \beta_{j2}\,\text{Sex} + \beta_{j3}\,\text{Race} \\
+&\quad + \beta_{j4}\,\text{Primarysite} + \beta_{j5}\,\text{Grade} + \beta_{j6}\,\text{Stage} \\
+&\quad + \beta_{j7}\,\text{Chemotherapy} + \beta_{j8}\,\text{Survivalmonths},
+\end{align}
+pour $j \in \{\text{Dead attributable},\,\text{Dead other cause}\}$.
+
+\subsection{Évaluation}
+\begin{itemize}
+    \item Significativité globale et individuelle des coefficients.
+    \item Qualité d'ajustement (AIC, BIC, pseudo-$R^2$).
+    \item Qualité de classification (matrice de confusion, précision, rappel, F1-score macro).
+\end{itemize}
+
+\section{Interprétation attendue des résultats}
+L'interprétation doit être orientée vers la décision :
+\begin{itemize}
+    \item Identifier les variables qui différencient significativement les causes de décès.
+    \item Quantifier l'augmentation ou la diminution du risque relatif via les odds-ratios.
+    \item Évaluer la contribution du stade tumoral, du grade et de la chimiothérapie dans la structure des probabilités prédites.
+\end{itemize}
+
+Par exemple, si pour la modalité \textit{Dead attributable}, on obtient $\exp(\beta_{\text{Stage IV}})>1$, cela signifie qu'à caractéristiques comparables, le stade IV augmente les chances relatives de décès attribuable au cancer par rapport à la modalité de référence.
+
+\section{Discussion}
+L'intérêt principal de la RLM dans ce contexte est de fournir une modélisation simultanée de plusieurs issues cliniques concurrentes, sans imposer d'ordre artificiel entre les modalités. Cette approche est plus informative qu'une succession de modèles binaires séparés, car elle respecte la structure multinomiale de la variable réponse.
+
+Quelques limites doivent néanmoins être discutées :
+\begin{itemize}
+    \item hypothèse d'indépendance des alternatives non pertinentes (IIA),
+    \item sensibilité à la qualité du codage des variables qualitatives,
+    \item interprétation plus complexe en présence de nombreuses interactions.
+\end{itemize}
+
+\section{Conclusion}
+Cette étude montre que la régression logistique multinomiale constitue un cadre pertinent pour relier des caractéristiques patient aux différentes issues de survie et de mortalité spécifique. Sur le plan méthodologique, elle permet de combiner interprétabilité statistique et performance de classification multi-classes.
+
+En cohérence avec l'objectif principal, l'apport du travail est triple :
+\begin{enumerate}[label=\arabic*.]
+    \item clarifier les concepts fondamentaux de la RLM,
+    \item expliciter les mesures nécessaires à une interprétation rigoureuse,
+    \item illustrer leur application sur une base de données réelle à visée clinique.
+\end{enumerate}
+
+\section*{Annexe : trame minimale de reproduction (R)}
+\begin{verbatim}
+# install.packages(c("readxl", "nnet", "caret", "dplyr"))
+library(readxl)
+library(nnet)
+library(caret)
+library(dplyr)
+
+df <- read_excel("10.21037atm-2020-57-1 (1vr).xlsx", sheet = "Table 1")
+df <- df %>% mutate(across(c(Agegroup, Sex, Race, Primarysite, Grade,
+                             Stage, Chemotherapy, Status, Csdc), as.factor))
+
+df$Csdc <- relevel(df$Csdc, ref = "Alive")
+set.seed(123)
+idx <- createDataPartition(df$Csdc, p = 0.7, list = FALSE)
+train <- df[idx, ]
+test  <- df[-idx, ]
+
+fit <- multinom(Csdc ~ Agegroup + Sex + Race + Primarysite + Grade + Stage +
+                Chemotherapy + Survivalmonths,
+                data = train, trace = FALSE)
+
+summary(fit)
+
+pred <- predict(fit, newdata = test)
+confusionMatrix(pred, test$Csdc)
+\end{verbatim}
+
+\section*{Références indicatives}
+\begin{enumerate}[label={[\arabic*]}]
+    \item Agresti, A. (2013). \textit{Categorical Data Analysis}. Wiley.
+    \item Hosmer, D. W., Lemeshow, S., \& Sturdivant, R. X. (2013). \textit{Applied Logistic Regression}. Wiley.
+    \item McFadden, D. (1974). Conditional logit analysis of qualitative choice behavior.
+    \item Document de cours : \textit{TP.pdf} (régression logistique multinomiale).
+    \item Données : \textit{10.21037atm-2020-57-1 (1vr).xlsx}.
+\end{enumerate}
+
+\end{document}

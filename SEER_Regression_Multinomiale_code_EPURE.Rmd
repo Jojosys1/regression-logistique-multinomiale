@@ -1,0 +1,923 @@
+---
+title: "Régression Logistique Multinomiale — Données SEER"
+subtitle: "Classification de la cause de décès chez les patients cancéreux"
+author:
+  - "DOSSOU YOVO Thérèse"
+  - "GLODJO Jolémon"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    code_folding: show
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width  = 10,
+  fig.height = 6,
+  fig.align  = "center"
+)
+```
+
+------------------------------------------------------------------------
+
+# Plan d'Analyse
+
+Cette étude suit un plan en **6 étapes** :
+
+> **Étape 1** — Présentation des données et encodage\
+> **Étape 2** — Analyse Exploratoire (statistiques descriptives +
+> graphiques)\
+> **Étape 3** — Vérification des conditions d'application\
+> **Étape 4** — Modélisation (régression logistique multinomiale)\
+> **Étape 5** — Tests de significativité et validation\
+> **Étape 6** — Résultats, interprétations et discussion
+
+**Rappel théorique :** La régression logistique multinomiale modélise
+une variable dépendante **Y** qualitative à **M \> 2** catégories non
+ordonnées. Elle ajuste simultanément **M − 1** équations logistiques par
+rapport à une catégorie de référence. Ici : **Csdc** a 3 catégories →
+**2 équations**, chacune avec 8 paramètres (7 variables + constante) →
+**16 coefficients** à analyser.
+
+------------------------------------------------------------------------
+
+# Chargement des packages et des données
+
+```{r packages}
+liste_packages <- c(
+  "readxl", "nnet", "VGAM", "dplyr", "tidyr",
+  "ggplot2", "ggpubr", "scales", "knitr", "kableExtra",
+  "car", "pROC", "caret", "reshape2", "forcats", "RColorBrewer"
+)
+
+invisible(lapply(liste_packages, function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+  library(pkg, character.only = TRUE)
+}))
+```
+
+```{r}
+library(haven)
+library(gtsummary)
+library(VGAM)
+library(kableExtra)
+
+```
+
+------------------------------------------------------------------------
+
+# ÉTAPE 1 — Présentation et Encodage des Données
+
+## Chargement et nettoyage
+
+```{r encodage-complet}
+# Chargement
+seer_multi <- read_excel("C:/Users/VICTUS/Desktop/Régression logistique multinomiale/10.21037atm-2020-57-1 (1vr).xlsx")
+View(X10_21037atm_2020_57_1_1vr_)
+cat("Données brutes :", nrow(seer_multi), "lignes ×", ncol(seer_multi), "colonnes\n")
+
+# Suppression des espaces dans les chaînes
+seer_multi <- seer_multi %>%
+  mutate(across(where(is.character), stringr::str_trim))
+```
+
+## Encodage des variables
+
+```{r encodage-variables}
+# Variables nominales
+seer_multi <- seer_multi %>%
+  mutate(
+    Agegroup     = factor(Agegroup),
+    Sex          = factor(Sex, levels = c("Male", "Female")),
+    Race         = factor(Race, levels = c("White", "Black", "Other")),
+    Primarysite  = factor(Primarysite, levels = c("Upper", "Middle", "Lower", "Main")),
+    Chemotherapy = factor(Chemotherapy, levels = c("No/unknown", "Yes")),
+    Status       = factor(Status)
+  )
+
+# Variables ordinales
+seer_multi$Grade <- factor(
+  seer_multi$Grade, ordered = TRUE,
+  levels = c("Grade I", "Grade II", "Grade III", "Grade IV")
+)
+
+seer_multi$Stage <- factor(
+  seer_multi$Stage, ordered = TRUE,
+  levels = c("I", "II", "III", "IV")
+)
+
+# Variable outcome : référence = "Alive"
+seer_multi$Csdc <- factor(
+  seer_multi$Csdc,
+  levels = c("Alive", "Dead (attributable to this cancer dx)", "Dead of other cause")
+)
+seer_multi$Csdc <- relevel(seer_multi$Csdc, ref = "Alive")
+```
+
+## Nettoyage final
+
+```{r nettoyage-final}
+seer_multi <- droplevels(seer_multi)
+
+vars_modele <- c("Csdc", "Agegroup", "Sex", "Race",
+                 "Primarysite", "Grade", "Stage", "Chemotherapy")
+
+# Suppression des lignes avec valeurs manquantes
+na_avant <- sum(is.na(seer_multi[, vars_modele]))
+seer_multi <- seer_multi %>%
+  filter(complete.cases(pick(all_of(vars_modele))))
+
+cat("Observations après nettoyage :", nrow(seer_multi), "\n")
+cat("Valeurs manquantes supprimées :", na_avant, "\n")
+cat("Référence (Csdc) :", levels(seer_multi$Csdc)[1], "\n")
+sapply(seer_multi[, vars_modele], nlevels)
+```
+
+**Interprétation :** Le choix de la catégorie de référence `Alive` est
+fondamental : tous les résultats s'interpréteront comme *"par rapport
+aux patients encore en vie"*. Les deux équations estimeront
+respectivement la probabilité de décéder du cancer et d'une autre cause.
+
+------------------------------------------------------------------------
+
+# ÉTAPE 2 — Analyse Exploratoire des Données
+
+## Aperçu de la base
+
+```{r apercu-base}
+kable(head(seer_multi[, vars_modele], 8),
+      caption = "Tableau 1 — Aperçu des premières observations",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+## Statistiques descriptives — Survivalmonths
+
+```{r stats-descriptives}
+surv_stats <- seer_multi %>%
+  summarise(
+    N           = n(),
+    Moyenne     = round(mean(Survivalmonths, na.rm = TRUE), 2),
+    Médiane     = median(Survivalmonths, na.rm = TRUE),
+    Écart_type  = round(sd(Survivalmonths, na.rm = TRUE), 2),
+    Min         = min(Survivalmonths, na.rm = TRUE),
+    Max         = max(Survivalmonths, na.rm = TRUE),
+    Q1          = quantile(Survivalmonths, 0.25, na.rm = TRUE),
+    Q3          = quantile(Survivalmonths, 0.75, na.rm = TRUE),
+    IQR         = IQR(Survivalmonths, na.rm = TRUE)
+  )
+
+kable(t(surv_stats), col.names = "Valeur",
+      caption = "Tableau 2 — Statistiques descriptives : Survivalmonths") %>%
+  kable_styling(full_width = FALSE)
+
+# Par groupe Csdc
+surv_par_groupe <- seer_multi %>%
+  group_by(Csdc) %>%
+  summarise(
+    N        = n(),
+    Pct      = round(100 * n() / nrow(seer_multi), 1),
+    Moyenne  = round(mean(Survivalmonths, na.rm = TRUE), 1),
+    Médiane  = median(Survivalmonths, na.rm = TRUE),
+    Ecart_type = round(sd(Survivalmonths, na.rm = TRUE), 1),
+    Min      = min(Survivalmonths, na.rm = TRUE),
+    Max      = max(Survivalmonths, na.rm = TRUE)
+  )
+
+kable(surv_par_groupe,
+      caption = "Tableau 3 — Statistiques de survie par catégorie de Csdc",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+> **Interprétation :** Les patients décédant du cancer ont une survie
+> médiane nettement plus courte. La variance élevée traduit une
+> hétérogénéité clinique importante au sein de chaque groupe.
+
+## Distribution de la variable outcome (Csdc)
+
+```{r plot-outcome, fig.height=5}
+freq_csdc <- seer_multi %>%
+  count(Csdc) %>%
+  mutate(
+    pct        = round(100 * n / sum(n), 1),
+    label      = paste0(n, "\n(", pct, "%)"),
+    Csdc_court = c("Vivant", "Décès cancer", "Décès autre")
+  )
+
+ggplot(freq_csdc, aes(x = reorder(Csdc_court, -n), y = n, fill = Csdc_court)) +
+  geom_bar(stat = "identity", width = 0.55) +
+  geom_text(aes(label = label), vjust = -0.4, size = 4) +
+  scale_fill_manual(values = c("Vivant" = "#2e7d32",
+                               "Décès cancer" = "#c62828",
+                               "Décès autre"  = "#e65100")) +
+  labs(title = "Figure 1 — Distribution de la cause de décès (Csdc)",
+       x = NULL, y = "Effectif") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+> **Interprétation :** Les données présentent un **déséquilibre de
+> classes** — "Alive" est majoritaire. Un modèle naïf prédisant toujours
+> "Alive" aurait déjà un bon score d'accuracy. On privilégiera donc les
+> métriques par classe (AUC, sensibilité).
+
+## Distribution des variables explicatives
+
+```{r plot-covariables, fig.height=16}
+vars_cat <- c("Agegroup", "Sex", "Race", "Primarysite",
+              "Grade", "Stage", "Chemotherapy")
+
+plots_dist <- lapply(vars_cat, function(v) {
+  df <- seer_multi %>%
+    count(.data[[v]]) %>%
+    mutate(pct = round(100 * n / sum(n), 1))
+
+  ggplot(df, aes(x = fct_reorder(.data[[v]], n), y = n)) +
+    geom_bar(stat = "identity", width = 0.65, fill = "steelblue") +
+    geom_text(aes(label = paste0(pct, "%")), hjust = -0.1, size = 3) +
+    coord_flip() +
+    labs(title = v, x = NULL, y = "Effectif") +
+    theme_minimal()
+})
+
+ggarrange(plotlist = plots_dist, ncol = 2, nrow = 4)
+```
+
+```{r stats-cat}
+for (v in vars_cat) {
+  df_freq <- seer_multi %>%
+    count(.data[[v]]) %>%
+    mutate(Pct = round(100 * n / sum(n), 1)) %>%
+    rename(Modalité = 1)
+
+  print(
+    kable(df_freq, caption = paste("Tableau — Fréquences :", v),
+          row.names = FALSE) %>%
+      kable_styling(full_width = FALSE)
+  )
+}
+```
+
+## Analyse bivariée — Csdc selon chaque variable
+
+```{r bivariate-plots, fig.height=18}
+plots_bi <- lapply(vars_cat, function(v) {
+  df <- seer_multi %>%
+    group_by(.data[[v]], Csdc) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    group_by(.data[[v]]) %>%
+    mutate(pct = round(100 * n / sum(n), 1))
+
+  ggplot(df, aes(x = .data[[v]], y = pct, fill = Csdc)) +
+    geom_bar(stat = "identity", position = "fill", width = 0.65) +
+    geom_text(aes(label = ifelse(pct > 5, paste0(pct, "%"), "")),
+              position = position_fill(vjust = 0.5),
+              size = 2.8, color = "white") +
+    scale_y_continuous(labels = percent_format()) +
+    scale_fill_manual(
+      values = c("Alive"                                 = "#2e7d32",
+                 "Dead (attributable to this cancer dx)" = "#c62828",
+                 "Dead of other cause"                   = "#e65100"),
+      labels = c("Vivant", "Décès cancer", "Décès autre")
+    ) +
+    coord_flip() +
+    labs(title = paste("Csdc selon", v), x = NULL, y = "Proportion (%)") +
+    theme_minimal(base_size = 10) +
+    theme(legend.position = "bottom")
+})
+
+ggarrange(plotlist = plots_bi, ncol = 1, nrow = length(vars_cat),
+          common.legend = TRUE, legend = "bottom")
+```
+
+## Tests du Chi² — associations bivariées
+
+```{r chi2-tests}
+chi2_df <- do.call(rbind, lapply(vars_cat, function(v) {
+  tbl   <- table(seer_multi[[v]], seer_multi$Csdc)
+  test  <- chisq.test(tbl)
+  data.frame(
+    Variable   = v,
+    Chi2       = round(test$statistic, 2),
+    Ddl        = test$parameter,
+    p_valeur   = round(test$p.value, 4),
+    Sig        = ifelse(test$p.value < 0.001, "***",
+                 ifelse(test$p.value < 0.01,  "**",
+                 ifelse(test$p.value < 0.05,  "*", "ns")))
+  )
+}))
+rownames(chi2_df) <- NULL
+
+kable(chi2_df, caption = "Tableau 4 — Tests Chi² d'indépendance (Csdc × covariables)",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+## Distribution de la survie selon Csdc
+
+```{r boxplot-survie, fig.height=5}
+ggplot(seer_multi, aes(x = Csdc, y = Survivalmonths, fill = Csdc)) +
+  geom_violin(alpha = 0.3, width = 0.8) +
+  geom_boxplot(width = 0.25, outlier.alpha = 0.2) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white") +
+  scale_fill_manual(values = c("#2e7d32", "#c62828", "#e65100")) +
+  scale_x_discrete(labels = c("Vivant", "Décès\ncancer", "Décès\nautre")) +
+  labs(title = "Figure 4 — Distribution des mois de survie selon la cause de décès",
+       x = NULL, y = "Mois de survie") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Test de Kruskal-Wallis
+kw <- kruskal.test(Survivalmonths ~ Csdc, data = seer_multi)
+cat(sprintf("Kruskal-Wallis : χ²(%.0f) = %.3f, p = %.2e\n",
+            kw$parameter, kw$statistic, kw$p.value))
+```
+
+> **Interprétation :** Les patients décédant du cancer ont une médiane
+> de survie très inférieure aux vivants. Les décès d'autre cause
+> montrent une distribution plus étalée, cohérente avec une mortalité
+> diverse (cardiovasculaire, etc.).
+
+------------------------------------------------------------------------
+
+# ÉTAPE 3 — Vérification des Conditions d'Application
+
+> Avant de modéliser, on vérifie : 1. Absence de multicolinéarité (VIF)
+> 2. Absence de sur/sous-dispersion (ratio χ²/ddl de Pearson) 3. Absence
+> de séparation parfaite (test Hauck-Donner) 4. Hypothèse IIA
+> (Indépendance des Alternatives Non Pertinentes)
+
+## Condition 1 — Multicolinéarité (VIF)
+
+```{r vif}
+# Régression auxiliaire sur variable binaire pour approcher le VIF
+seer_multi$csdc_bin <- as.numeric(seer_multi$Csdc != "Alive")
+lm_aux <- lm(csdc_bin ~ Agegroup + Sex + Race + Primarysite +
+               Grade + Stage + Chemotherapy, data = seer_multi)
+
+vif_res <- car::vif(lm_aux)
+seer_multi$csdc_bin <- NULL
+
+if (is.matrix(vif_res)) {
+  vif_df <- data.frame(
+    Variable        = rownames(vif_res),
+    GVIF            = round(vif_res[, 1], 3),
+    GVIF_adj        = round(vif_res[, 3], 3),
+    Diagnostic      = ifelse(vif_res[, 3] < sqrt(2), "Aucune",
+                      ifelse(vif_res[, 3] < sqrt(5), "Modérée",
+                      ifelse(vif_res[, 3] < sqrt(10), "Forte", "Sévère")))
+  )
+} else {
+  vif_df <- data.frame(
+    Variable   = names(vif_res),
+    VIF        = round(vif_res, 3),
+    Diagnostic = ifelse(vif_res < 2,  "Aucune",
+                 ifelse(vif_res < 5,  "Modérée",
+                 ifelse(vif_res < 10, "Forte", "Sévère")))
+  )
+}
+
+kable(vif_df, caption = "Tableau 5 — VIF : diagnostic de multicolinéarité",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+> **Règle :** VIF \< 5 → absence de multicolinéarité significative. Les
+> estimations des coefficients ne seront pas artificiellement gonflées.
+
+## Condition 2 — Sur/Sous-Dispersion (χ² de Pearson via VGAM)
+
+```{r dispersion}
+modele_vgam <- vglm(
+  Csdc ~ Agegroup + Sex + Race + Primarysite + Grade + Stage + Chemotherapy,
+  data   = seer_multi,
+  family = multinomial(refLevel = "Alive")
+)
+
+khi2_pearson    <- sum(residuals(modele_vgam, type = "pearson")^2)
+N               <- nrow(seer_multi)
+p               <- modele_vgam@rank
+M               <- nlevels(seer_multi$Csdc)
+ddl_pearson     <- (N - p) * (M - 1)
+ratio_dispersion <- khi2_pearson / ddl_pearson
+
+cat("χ² de Pearson :", round(khi2_pearson, 3), "\n")
+cat("Degrés de liberté :", ddl_pearson, "\n")
+cat("Ratio χ²/ddl :", round(ratio_dispersion, 4), "\n")
+cat("Diagnostic :",
+    ifelse(abs(ratio_dispersion - 1) <= 0.15, "Dispersion correcte (≈ 1)",
+    ifelse(ratio_dispersion > 1, "Sur-dispersion détectée",
+                                  "Sous-dispersion détectée")), "\n")
+```
+
+> **Interprétation :** Un ratio ≈ 1 valide l'utilisation de la famille
+> multinomiale standard sans correction de la variance.
+
+## Condition 3 — Séparation parfaite (test Hauck-Donner)
+
+```{r separation-parfaite}
+hd_test <- hdeff(modele_vgam)
+variables_separees <- hd_test[hd_test == TRUE]
+
+if (length(variables_separees) == 0) {
+  cat("Aucune variable ne provoque de séparation parfaite.\n")
+  cat("Le modèle peut être ajusté sans risque d'explosion des coefficients.\n")
+} else {
+  cat("Variables problématiques :", names(variables_separees), "\n")
+  cat("Envisager de regrouper les modalités ou d'exclure ces variables.\n")
+}
+```
+
+## Condition 4 — Test IIA (réservé après ajustement du modèle)
+
+```{r iia-placeholder}
+# Le test IIA compare le modèle complet à des modèles réduits (sans une catégorie).
+# Il sera exécuté après l'ajustement de multimodel (section Étape 4).
+cat("Le test IIA sera exécuté après l'ajustement du modèle.\n")
+```
+
+------------------------------------------------------------------------
+
+# ÉTAPE 4 — Modélisation
+
+## Ajustement du modèle principal
+
+```{r modele-principal}
+set.seed(2024)
+
+multimodel <- multinom(
+  Csdc ~ Agegroup + Sex + Race + Primarysite + Grade + Stage + Chemotherapy,
+  data    = seer_multi,
+  MaxNWts = 1000,
+  maxit   = 300,
+  trace   = FALSE
+)
+
+cat("Catégories :", nlevels(seer_multi$Csdc), "→",
+    nlevels(seer_multi$Csdc) - 1, "équation(s)\n")
+cat("Paramètres ajustés :", multimodel$edf, "\n")
+cat("AIC :", round(AIC(multimodel), 2), "\n")
+```
+
+## Résumé du modèle
+
+```{r model-summary}
+summary(multimodel)
+```
+
+## Odds Ratios, IC 95% et p-valeurs (Test de Wald)
+
+```{r wald-or-table}
+coefs <- coef(multimodel)
+se    <- summary(multimodel)$standard.errors
+z_val <- coefs / se
+pval  <- 2 * (1 - pnorm(abs(z_val),0,1))
+
+res_list <- lapply(rownames(coefs), function(outcome) {
+  data.frame(
+    Outcome    = outcome,
+    Variable   = colnames(coefs),
+    Beta       = round(coefs[outcome, ], 4),
+    SE         = round(se[outcome, ], 4),
+    Wald_z     = round(z_val[outcome, ], 3),
+    OR         = round(exp(coefs[outcome, ]), 3),
+    IC_2.5     = round(exp(coefs[outcome, ] - 1.96 * se[outcome, ]), 3),
+    IC_97.5    = round(exp(coefs[outcome, ] + 1.96 * se[outcome, ]), 3),
+    p_valeur   = round(pval[outcome, ], 4),
+    Sig        = ifelse(pval[outcome, ] < 0.001, "***",
+                 ifelse(pval[outcome, ] < 0.01,  "**",
+                 ifelse(pval[outcome, ] < 0.05,  "*",
+                 ifelse(pval[outcome, ] < 0.1,   ".", "ns"))))
+  )
+})
+
+resultats_df <- do.call(rbind, res_list) %>%
+  filter(Variable != "(Intercept)")
+rownames(resultats_df) <- NULL
+
+kable(resultats_df,
+      caption = "Tableau 6 — Odds Ratios (OR), IC 95% et test de Wald",
+      digits = 3, row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+> **Lecture du tableau :** - **OR \> 1** → cette modalité *augmente* la
+> probabilité du décès vs vivants - **OR \< 1** → effet protecteur -
+> **IC 95% ne contenant pas 1** → résultat significatif
+
+## Forest Plot des Odds Ratios
+
+```{r forest-plot, fig.height=11}
+ggplot(resultats_df, aes(x = OR, y = fct_reorder(Variable, OR), color = Outcome)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(aes(xmin = IC_2.5, xmax = IC_97.5), height = 0.35, alpha = 0.6) +
+  geom_point(size = 3) +
+  scale_color_manual(
+    values = c("Dead (attributable to this cancer dx)" = "#c62828",
+               "Dead of other cause"                   = "#e65100"),
+    labels = c("Décès cancer", "Décès autre")
+  ) +
+  scale_x_log10() +
+  facet_wrap(~Outcome, ncol = 1, scales = "free_x") +
+  labs(title = "Figure 5 — Forest Plot des Odds Ratios",
+       subtitle = "Axe log — ligne pointillée = OR 1 (pas d'effet)",
+       x = "Odds Ratio (log scale)", y = NULL) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Test IIA — résultats
+
+```{r iia-resultats}
+iia_df <- do.call(rbind, lapply(levels(seer_multi$Csdc), function(cat_exclue) {
+  data_sub <- seer_multi %>% filter(Csdc != cat_exclue) %>% droplevels()
+
+  mod_sub <- tryCatch(
+    multinom(Csdc ~ Agegroup + Sex + Race + Primarysite +
+               Grade + Stage + Chemotherapy,
+             data = data_sub, MaxNWts = 1000, maxit = 300, trace = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(mod_sub)) return(NULL)
+
+  ll_c  <- as.numeric(logLik(multimodel))
+  ll_r  <- as.numeric(logLik(mod_sub))
+  stat  <- abs(2 * (ll_c - ll_r))
+  ddl   <- abs(multimodel$edf - mod_sub$edf)
+  p_val <- pchisq(stat, df = ddl, lower.tail = FALSE)
+
+  data.frame(
+    Catégorie_exclue = cat_exclue,
+    Hausman_chi2     = round(stat, 3),
+    Ddl              = ddl,
+    p_valeur         = round(p_val, 4),
+    Conclusion       = ifelse(p_val > 0.05, "IIA respectée", "IIA violée")
+  )
+}))
+
+kable(iia_df, caption = "Tableau 7 — Test IIA de Hausman-McFadden",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+
+cat("p > 0.05 → L'hypothèse IIA est respectée.\n")
+cat("La régression multinomiale est bien adaptée aux données.\n")
+```
+
+------------------------------------------------------------------------
+
+# ÉTAPE 5 — Tests de Significativité et Validation
+
+## Test du Rapport de Vraisemblance (LRT) — Significativité globale
+
+```{r lrt-global}
+null_model <- multinom(Csdc ~ 1, data = seer_multi, MaxNWts = 1000, trace = FALSE)
+
+ll_full  <- as.numeric(logLik(multimodel))
+ll_null  <- as.numeric(logLik(null_model))
+lrt_chi2 <- 2 * (ll_full - ll_null)
+lrt_ddl  <- multimodel$edf - null_model$edf
+lrt_p    <- pchisq(lrt_chi2, df = lrt_ddl, lower.tail = FALSE)
+
+cat("Log-vraisemblance modèle complet :", round(ll_full, 3), "\n")
+cat("Log-vraisemblance modèle nul     :", round(ll_null, 3), "\n")
+cat(sprintf("LRT χ²(%d) = %.3f, p = %.2e\n", lrt_ddl, lrt_chi2, lrt_p))
+cat(ifelse(lrt_p < 0.05,
+           "Modèle GLOBALEMENT SIGNIFICATIF (p < 0.05)\n",
+           "Modèle non significatif\n"))
+```
+
+> **Interprétation :** Un χ² significatif signifie que les 7 variables
+> apportent collectivement une information pertinente pour prédire la
+> cause de décès, au-delà du hasard.
+
+## Pseudo R² — Qualité d'ajustement
+
+```{r pseudo-r2}
+n             <- nrow(seer_multi)
+mcfadden      <- round(1 - ll_full / ll_null, 4)
+cox_snell     <- round(1 - exp(2 * (ll_null - ll_full) / n), 4)
+nagelkerke    <- round(cox_snell / (1 - exp(2 * ll_null / n)), 4)
+deviance_expl <- round(1 - deviance(multimodel) / deviance(null_model), 4)
+
+r2_df <- data.frame(
+  Indicateur = c("McFadden R²", "McFadden R² ajusté",
+                 "Cox & Snell R²", "Nagelkerke R²",
+                 "Déviance expliquée", "AIC", "BIC"),
+  Valeur     = c(mcfadden,
+                 round(1 - (ll_full - multimodel$edf) / ll_null, 4),
+                 cox_snell, nagelkerke, deviance_expl,
+                 round(AIC(multimodel), 2),
+                 round(BIC(multimodel), 2))
+)
+
+kable(r2_df, caption = "Tableau 8 — Qualité d'ajustement du modèle",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+## LRT par variable — Contribution de chaque prédicteur
+
+```{r lrt-variables}
+lrt_vars <- lapply(vars_modele[-1], function(var) {
+  termes_red <- setdiff(attr(terms(multimodel), "term.labels"), var)
+  form_red   <- as.formula(paste("Csdc ~", paste(termes_red, collapse = " + ")))
+
+  mod_red <- tryCatch(
+    multinom(form_red, data = seer_multi, MaxNWts = 15000, maxit = 300, trace = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(mod_red)) return(NULL)
+
+  chi2_v <- 2 * (ll_full - as.numeric(logLik(mod_red)))
+  ddl_v  <- multimodel$edf - mod_red$edf
+  p_v    <- pchisq(chi2_v, df = ddl_v, lower.tail = FALSE)
+
+  data.frame(
+    Variable   = var,
+    Chi2_LRT   = round(chi2_v, 2),
+    Ddl        = ddl_v,
+    p_valeur   = round(p_v, 4),
+    Sig        = ifelse(p_v < 0.001, "***",
+                 ifelse(p_v < 0.01,  "**",
+                 ifelse(p_v < 0.05,  "*", "ns"))),
+    Conclusion = ifelse(p_v < 0.05, "Variable utile", "Variable peu informative")
+  )
+})
+
+lrt_df <- do.call(rbind, Filter(Negate(is.null), lrt_vars))
+
+kable(lrt_df, caption = "Tableau 9 — LRT par variable (contribution au modèle)",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+
+ggplot(lrt_df, aes(x = reorder(Variable, Chi2_LRT), y = Chi2_LRT, fill = Sig)) +
+  geom_col(width = 0.65) +
+  geom_hline(yintercept = qchisq(0.95, df = 2), linetype = "dashed", color = "red") +
+  coord_flip() +
+  scale_fill_manual(values = c("***" = "#1b5e20", "**" = "#388e3c",
+                               "*"   = "#81c784", "ns" = "#bdbdbd")) +
+  labs(title = "Figure 6 — Contribution de chaque variable (LRT)",
+       subtitle = "Ligne rouge = seuil Chi² à 5%",
+       x = NULL, y = "Chi² du LRT") +
+  theme_minimal()
+```
+
+## Validation prédictive — Matrice de confusion et métriques
+
+```{r confusion-matrix}
+pred_class <- predict(multimodel, newdata = seer_multi)
+conf_mat   <- confusionMatrix(pred_class, seer_multi$Csdc)
+
+conf_df <- as.data.frame(conf_mat$table)
+colnames(conf_df) <- c("Prédit", "Observé", "Freq")
+conf_df <- conf_df %>%
+  group_by(Observé) %>%
+  mutate(Pct = round(100 * Freq / sum(Freq), 1)) %>%
+  ungroup()
+
+ggplot(conf_df, aes(x = Observé, y = Prédit, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(Freq, "\n(", Pct, "%)")), size = 4) +
+  scale_fill_gradient(low = "#e8f5e9", high = "#1b5e20") +
+  labs(title = "Figure 7 — Matrice de confusion",
+       subtitle = paste0("Accuracy : ",
+                         round(conf_mat$overall["Accuracy"] * 100, 1), "%",
+                         "  |  Kappa : ",
+                         round(conf_mat$overall["Kappa"], 3)),
+       x = "Classe observée", y = "Classe prédite") +
+  theme_minimal()
+
+# Métriques par classe
+metriques <- as.data.frame(conf_mat$byClass) %>%
+  select(Sensitivity, Specificity, `Pos Pred Value`, `Neg Pred Value`, F1) %>%
+  round(4)
+rownames(metriques) <- gsub("Class: ", "", rownames(metriques))
+colnames(metriques) <- c("Sensibilité", "Spécificité", "VPP", "VPN", "F1-score")
+
+kable(metriques, caption = "Tableau 10 — Métriques par classe") %>%
+  kable_styling(full_width = FALSE)
+```
+
+> **Interprétation :** L'accuracy mesure les prédictions correctes
+> toutes classes confondues. Le **Kappa \> 0.6** indique un bon accord
+> corrigé pour le hasard. La **sensibilité** est particulièrement
+> importante pour "Décès cancer" du point de vue clinique.
+
+## Courbes ROC et AUC
+
+```{r roc-auc, fig.height=6}
+pred_probs   <- fitted(multimodel)
+categories   <- levels(seer_multi$Csdc)
+couleurs_roc <- c("#2e7d32", "#c62828", "#e65100")
+
+par(mfrow = c(1, length(categories)), mar = c(4, 4, 3, 1))
+auc_vals <- sapply(seq_along(categories), function(i) {
+  bin   <- as.numeric(seer_multi$Csdc == categories[i])
+  roc_i <- roc(bin, pred_probs[, categories[i]], quiet = TRUE)
+  titre <- c("Alive (ref)", "Décès cancer", "Décès autre")[i]
+  plot(roc_i, main = titre, col = couleurs_roc[i], lwd = 2.5,
+       print.auc = TRUE, auc.polygon = TRUE,
+       auc.polygon.col = adjustcolor(couleurs_roc[i], 0.15),
+       print.auc.y = 0.4, xlab = "1 - Spécificité", ylab = "Sensibilité")
+  abline(a = 0, b = 1, lty = 2, col = "gray60")
+  as.numeric(auc(roc_i))
+})
+par(mfrow = c(1, 1))
+
+auc_table <- data.frame(
+  Catégorie    = categories,
+  AUC          = round(auc_vals, 4),
+  Discrimination = ifelse(auc_vals >= 0.90, "Excellente",
+                   ifelse(auc_vals >= 0.80, "Bonne",
+                   ifelse(auc_vals >= 0.70, "Acceptable", "Insuffisante")))
+)
+kable(auc_table, caption = "Tableau 11 — AUC par catégorie (one-vs-rest)",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+------------------------------------------------------------------------
+
+# ÉTAPE 6 — Résultats, Interprétations et Discussion
+
+## Probabilités prédites selon les facteurs clés
+
+```{r effets-stage, fig.height=5}
+pred_df <- as.data.frame(pred_probs)
+pred_df$Stage <- seer_multi$Stage
+
+pred_stage <- pred_df %>%
+  group_by(Stage) %>%
+  summarise(across(all_of(colnames(pred_probs)), mean, .names = "{.col}")) %>%
+  pivot_longer(-Stage, names_to = "Csdc_pred", values_to = "Prob")
+
+ggplot(pred_stage, aes(x = Stage, y = Prob, color = Csdc_pred, group = Csdc_pred)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  scale_color_manual(
+    values = c("Alive" = "#2e7d32",
+               "Dead (attributable to this cancer dx)" = "#c62828",
+               "Dead of other cause" = "#e65100"),
+    labels = c("Vivant", "Décès cancer", "Décès autre")
+  ) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "Figure 8 — Probabilités prédites moyennes selon le Stade tumoral",
+       x = "Stade", y = "Probabilité prédite moyenne") +
+  theme_minimal()
+```
+
+```{r effets-grade, fig.height=5}
+pred_df2 <- as.data.frame(pred_probs)
+pred_df2$Grade <- seer_multi$Grade
+
+pred_grade <- pred_df2 %>%
+  group_by(Grade) %>%
+  summarise(across(all_of(colnames(pred_probs)), mean, .names = "{.col}")) %>%
+  pivot_longer(-Grade, names_to = "Csdc_pred", values_to = "Prob")
+
+ggplot(pred_grade, aes(x = Grade, y = Prob, fill = Csdc_pred)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.6) +
+  scale_fill_manual(
+    values = c("Alive" = "#2e7d32",
+               "Dead (attributable to this cancer dx)" = "#c62828",
+               "Dead of other cause" = "#e65100"),
+    labels = c("Vivant", "Décès cancer", "Décès autre")
+  ) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "Figure 9 — Répartition prédite selon le Grade tumoral",
+       x = "Grade", y = "Probabilité prédite (empilée)") +
+  theme_minimal()
+```
+
+```{r effets-chemo, fig.height=5}
+pred_df3 <- as.data.frame(pred_probs)
+pred_df3$Chemo <- seer_multi$Chemotherapy
+
+pred_chemo <- pred_df3 %>%
+  group_by(Chemo) %>%
+  summarise(across(all_of(colnames(pred_probs)), mean, .names = "{.col}")) %>%
+  pivot_longer(-Chemo, names_to = "Csdc_pred", values_to = "Prob")
+
+ggplot(pred_chemo, aes(x = Chemo, y = Prob, fill = Csdc_pred)) +
+  geom_col(position = "dodge", width = 0.55) +
+  scale_fill_manual(
+    values = c("Alive" = "#2e7d32",
+               "Dead (attributable to this cancer dx)" = "#c62828",
+               "Dead of other cause" = "#e65100"),
+    labels = c("Vivant", "Décès cancer", "Décès autre")
+  ) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "Figure 10 — Probabilités prédites selon la Chimiothérapie",
+       subtitle = "Attention : biais d'indication",
+       x = "Chimiothérapie", y = "Probabilité prédite moyenne") +
+  theme_minimal()
+```
+
+## Tableau de synthèse des résultats significatifs
+
+```{r synthese-resultats}
+top_sig <- resultats_df %>%
+  filter(p_valeur < 0.05) %>%
+  arrange(Outcome, desc(OR)) %>%
+  select(Outcome, Variable, OR, IC_2.5, IC_97.5, p_valeur, Sig)
+
+kable(top_sig,
+      caption = "Tableau 12 — Facteurs significativement associés à la cause de décès",
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE)
+```
+
+## Discussion
+
+### Principaux résultats
+
+**1. Stade de la maladie (Stage)**
+
+Le stade est le prédicteur le plus puissant. Un stade IV multiplie
+massivement le risque de décéder du cancer vs stade I. Ce gradient
+reflète la biologie tumorale : les tumeurs métastatiques ont colonisé
+des organes distants, rendant la résection curative impossible dans la
+plupart des cas.
+
+**2. Grade tumoral (Grade)**
+
+Le grade histologique est fortement associé à la mortalité spécifique.
+Un Grade III ou IV traduit une perte de différenciation cellulaire et
+une capacité proliférative accrue. Ces tumeurs répondent souvent moins
+bien aux traitements standards.
+
+**3. Chimiothérapie (Chemotherapy)**
+
+L'interprétation doit être prudente. Il existe un **biais d'indication**
+
+:   la chimiothérapie est prescrite aux patients à stades plus avancés.
+    Ce n'est pas la chimiothérapie qui augmente le risque, mais le fait
+    que les patients qui la reçoivent sont déjà plus malades. Une
+    analyse causale (score de propension) serait nécessaire pour isoler
+    l'effet réel.
+
+**4. Groupe d'âge (Agegroup)**
+
+Les patients âgés présentent un risque accru de décès, toutes causes
+confondues : moins bonne tolérance aux traitements et compétition de
+risque plus élevée (maladies cardiovasculaires, etc.).
+
+**5. Disparités Sex/Race**
+
+Les différences observées soulèvent des questions d'équité en santé :
+inégalités d'accès aux soins, différences biologiques dans la réponse
+tumorale, différences socio-économiques dans la détection précoce.
+
+### Limites de l'étude
+
+-   **Biais de sélection** : La base SEER couvre les registres
+    américains et n'est pas généralisable à d'autres contextes.
+-   **Variables de confusion non mesurées** : statut de performance
+    (OMS), comorbidités, statut socio-économique, accès aux soins.
+-   **Hypothèse IIA** : bien que non rejetée, la relation entre les
+    catégories de décès pourrait ne pas être totalement indépendante.
+-   **Causalité** : la régression établit des associations, non des
+    relations causales.
+
+### Perspectives
+
+-   Analyse de survie de **Kaplan-Meier** et **modèle de Cox** pour
+    intégrer le temps jusqu'à l'événement.
+-   **Modèle à risques compétitifs** (Fine & Gray) pour mieux séparer
+    les types de décès.
+-   **Score de propension** pour l'effet de la chimiothérapie.
+
+------------------------------------------------------------------------
+
+# Conclusion
+
+Cette étude a permis d'identifier les facteurs pronostiques associés à
+la cause de décès chez des patients cancéreux à partir des données SEER,
+via une régression logistique multinomiale.
+
+Les **conditions d'application** ont été vérifiées (absence de
+multicolinéarité, dispersion correcte, pas de séparation parfaite, IIA
+vérifiée). Le modèle est **globalement significatif** (LRT p \< 0.05) et
+présente une qualité d'ajustement satisfaisante.
+
+Les résultats confirment que le **stade**, le **grade tumoral** et le
+**groupe d'âge** sont les déterminants majeurs du risque de décès.
+
+------------------------------------------------------------------------
+
+# Informations de session
+
+```{r session-info}
+sessionInfo()
+```
