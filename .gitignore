@@ -28,6 +28,9 @@ renv/staging/
 *.bbl
 *.blg
 
+# Fichiers temporaires Office / Excel
+~$*
+
 # Système / éditeurs
 .DS_Store
 Thumbs.db
